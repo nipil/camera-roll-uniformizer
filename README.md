@@ -7,13 +7,17 @@ python program to merge ios/android camera rolls, and making their naming and ti
 
 Install binary : https://imagemagick.org/script/download.php#windows
 
+    winget install --source winget --exact --id ImageMagick.ImageMagick.Q16
+
 Set environment variable `MAGICK_HOME` to `C:\Program Files\ImageMagick-...`
 
 Install package via PIP : `Wand`
 
 Install binary : https://ffmpeg.org/download.html#build-windows
 
-Add install path to the user's envionment variable `PATH`
+    winget install --source winget --exact --id Gyan.FFmpeg
+
+Add install path to the user's environment variable `PATH`
 
 Install package via PIP : `ffmpeg-python`
 

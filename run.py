@@ -107,7 +107,7 @@ def exif_build_gps_coordinates(image, dt):
                    altitude=alt * (-1 if alt_ref == exif.GpsAltitudeRef.BELOW_SEA_LEVEL else 1))
 
 
-def exif_get_information(path, *, gpx=None):
+def exif_get_information(path):
     # https://exiv2.org/tags.html
     # https://exiftool.org/TagNames/EXIF.html
     logging.debug(f'Getting EXIF informations for {path}')
@@ -123,20 +123,19 @@ def exif_get_information(path, *, gpx=None):
             raise ExifDateTimeError(f'{path} has no datetime information')
         dt = datetime.datetime.strptime(dt, '%Y:%m:%d %H:%M:%S')  # '2024:05:05 18:19:59'
         # build gps coordinates
-        if gpx is not None:
-            try:
-                gps = exif_build_gps_coordinates(image, dt)
-                gpx.append(gps)
-            except ExifGpsDataError as e:
-                logging.warning(f'Cannot use {path} GPS coordinates: {e}')
+        gps_coord = None
+        try:
+            gps_coord = exif_build_gps_coordinates(image, dt)
+        except ExifGpsDataError as e:
+            logging.warning(f'Cannot use {path} GPS coordinates: {e}')
         # build new name
         date_iso = dt.strftime('%Y-%m-%d')
         time_iso = dt.strftime('%H-%M-%S')
-        name = dt.strftime(f'IMG_{date_iso}_{time_iso}')
-        return name, date_iso
+        name = dt.strftime(f'{date_iso}_{time_iso}_LOCAL')
+        return name, date_iso, gps_coord
 
 
-def ffmpeg_get_timestamp_name(path):
+def ffmpeg_get_information(path):
     logging.debug(f'Getting FFMPEG timestamp name for {path}')
     infos = ffmpeg.probe(path)
     # MOV/MP4: format / tags / creation_time = '2024-05-12T05:38:26.000000Z'
@@ -148,8 +147,10 @@ def ffmpeg_get_timestamp_name(path):
     dt = datetime.datetime.strptime(creation_time, '%Y-%m-%dT%H:%M:%S.%fZ')
     date_iso = dt.strftime('%Y-%m-%d')
     time_iso = dt.strftime('%H-%M-%S')
-    name = dt.strftime(f'VID_{date_iso}_{time_iso}_UTC')
-    return name, date_iso
+    name = dt.strftime(f'{date_iso}_{time_iso}_UTC')
+    # TODO: extract gps coordinates from video file ?
+    gps_coord = None
+    return name, date_iso, gps_coord
 
 
 def create_directory(path, *, dry_run=False):
@@ -182,8 +183,8 @@ def rename_without_overwrite(path, new_name, out_directory, extension, *, dry_ru
     rename_file(path, new_path, dry_run=dry_run)
 
 
-def process_file(path, *, dry_run=False, gpx=None):
-    logging.info(f'Processing file {path}')
+def process_media(path, *, dry_run=False):
+    gps_coord = None
     name, extension = os.path.splitext(os.path.basename(path))
     low_extension = extension.lower()
     # remove useless files types
@@ -199,46 +200,50 @@ def process_file(path, *, dry_run=False, gpx=None):
         low_extension = extension.lower()
     # extract date and time, move and rename
     if low_extension in EXIF_IMAGE_EXTENSIONS:
-        new_name, out_directory = exif_get_information(path, gpx=gpx)
+        new_name, out_directory, gps_coord = exif_get_information(path)
         rename_without_overwrite(path, new_name, out_directory, low_extension, dry_run=dry_run)
     if low_extension in VIDEO_IMAGE_EXT:
-        new_name, out_directory = ffmpeg_get_timestamp_name(path)
+        new_name, out_directory, gps_coord = ffmpeg_get_information(path)
         rename_without_overwrite(path, new_name, out_directory, low_extension, dry_run=dry_run)
+    return gps_coord
 
 
-def maybe_process_file_executor(path, *, dry_run=False, executor=None, gpx=None):
-    if executor is not None:
-        executor.submit(process_file, path, dry_run=dry_run, gpx=gpx)
-    else:
-        process_file(path, dry_run=dry_run, gpx=gpx)
+def try_process_file(path, *, dry_run=False):
+    try:
+        return process_media(path, dry_run=dry_run)
+    except SkipFileError as e:
+        logging.warning(f'Skipping file: {e}')
+    return None
 
 
-def process_directory(path, *, dry_run=False, executor=None, gpx=None):
+def queue_file(path, *, executor, dry_run=False):
+    logging.info(f'Queuing file {path}')
+    yield executor.submit(try_process_file, path, dry_run=dry_run)
+
+
+def process_directory(path, *, executor, dry_run=False):
     logging.debug(f'Processing directory {path}')
     for root, dirs, files in os.walk(path):
         for i, file in enumerate(files):
             path = os.path.join(root, file)
-            try:
-                maybe_process_file_executor(path, dry_run=dry_run, executor=executor, gpx=gpx)
-            except SkipFileError as e:
-                logging.warning(f'Skipping file: {e}')
-                continue
+            yield from queue_file(path, executor=executor, dry_run=dry_run)
         for directory in dirs:
             path = os.path.join(root, directory)
-            process_directory(path, dry_run=dry_run, gpx=gpx)
+            yield from process_directory(path, executor=executor, dry_run=dry_run)
 
 
-def process_source(source, *, dry_run=False, executor=None, gpx=None):
+def process_source(source, *, executor, dry_run=False):
     logging.debug(f'Processing source {source}')
     if os.path.isdir(source):
-        process_directory(source, dry_run=dry_run, executor=executor, gpx=gpx)
+        yield from process_directory(source, executor=executor, dry_run=dry_run)
     else:
-        maybe_process_file_executor(source, dry_run=dry_run, executor=executor, gpx=gpx)
+        yield from queue_file(source, executor=executor, dry_run=dry_run)
 
 
-def process_sources(sources, *, dry_run=False, executor=None, gpx=None):
+def process_sources(sources, *, executor, dry_run=False):
+    logging.debug(f'Processing sources {sources}')
     for source in sources:
-        process_source(source, dry_run=dry_run, executor=executor, gpx=gpx)
+        yield from process_source(source, executor=executor, dry_run=dry_run)
 
 
 def write_gpx_trace(entries):
@@ -267,14 +272,12 @@ def write_gpx_trace(entries):
 
 
 def run(args):
-    gpx = []
-    if args.workers is not None:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
-            process_sources(args.sources, dry_run=args.dry_run, executor=executor, gpx=gpx)
-            logging.info('Waiting for completion of worker processes...')
-    else:
-        process_sources(args.sources, dry_run=args.dry_run, executor=None, gpx=gpx)
-    write_gpx_trace(gpx)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
+        futures = process_sources(args.sources, executor=executor, dry_run=args.dry_run)
+        results = [future.result() for future in futures if future.result() is not None]
+        results = sorted(results, key=lambda gps_info: gps_info.timestamp)
+        print(f'{len(results)=}')
+    write_gpx_trace(results)
 
 
 def check_positive_int(value):
