@@ -212,7 +212,9 @@ def try_process_file(path, *, dry_run=False):
     try:
         return process_media(path, dry_run=dry_run)
     except SkipFileError as e:
-        logging.warning(f'Skipping file: {e}')
+        logging.warning(f'Skipping file {path}: {e}')
+    except Exception as e:
+        logging.error(f'Unknown exception, skipping file {path} due to : {e}')
     return None
 
 
