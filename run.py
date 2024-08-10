@@ -20,7 +20,7 @@ EXIF_IMAGE_EXTENSIONS = ('.jpg')
 
 VIDEO_IMAGE_EXT = ('.mov', '.mp4')
 
-TRANSFORM_IMAGE_EXTENSIONS = ('.png', '.heic')
+TRANSFORM_IMAGE_EXTENSIONS = ('.jpeg', '.png', '.heic')
 TARGET_IMAGEMAGICK_FORMAT = 'jpeg'
 TARGET_IMAGEMAGICK_EXTENSION = '.jpg'
 
@@ -70,10 +70,9 @@ def delete_file(path, *, dry_run=False):
 
 
 def wand_transform_image(path, target_format, new_path, *, dry_run=False):
-    logging.debug(f'Transforming image {path}')
     if os.path.exists(new_path):
         raise TargetExistsError(f'{new_path} already exists')
-    logging.debug(f'Converting image to {target_format} into {new_path}')
+    logging.info(f'Converting image {path} to {target_format} into {new_path}')
     if not dry_run:
         with wand.image.Image(filename=path) as original:
             with original.convert(target_format) as converted:
@@ -164,7 +163,7 @@ def create_directory(path, *, dry_run=False):
 
 
 def rename_file(src_path, dst_path, *, dry_run=False):
-    logging.debug(f'Renaming {src_path} into {dst_path}')
+    logging.info(f'Renaming {src_path} into {dst_path}')
     if not dry_run:
         os.rename(src_path, dst_path)
 
@@ -293,8 +292,7 @@ def main(argv=None):
     parser.add_argument('--workers', type=check_positive_int)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--log-level', choices=['debug', 'info', 'warning', 'error', 'critical'], default='warning')
-    args = parser.parse_args()
-
+    args = parser.parse_args(argv)
     logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S',
                         level=getattr(logging, args.log_level.upper()))
 
