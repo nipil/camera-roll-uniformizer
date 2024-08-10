@@ -20,7 +20,7 @@ EXIF_IMAGE_EXTENSIONS = ('.jpg')
 
 VIDEO_IMAGE_EXT = ('.mov', '.mp4')
 
-TRANSFORM_IMAGE_EXTENSIONS = ('.jpeg', '.png', '.heic')
+TRANSFORM_IMAGE_EXTENSIONS = ('.jpeg', '.heic')
 TARGET_IMAGEMAGICK_FORMAT = 'jpeg'
 TARGET_IMAGEMAGICK_EXTENSION = '.jpg'
 
@@ -219,7 +219,7 @@ def try_process_file(path, *, dry_run=False):
 
 
 def queue_file(path, *, executor, dry_run=False):
-    logging.info(f'Queuing file {path}')
+    logging.debug(f'Queuing file {path}')
     yield executor.submit(try_process_file, path, dry_run=dry_run)
 
 
@@ -278,7 +278,6 @@ def run(args):
         futures = process_sources(args.sources, executor=executor, dry_run=args.dry_run)
         results = [future.result() for future in futures if future.result() is not None]
         results = sorted(results, key=lambda gps_info: gps_info.timestamp)
-        print(f'{len(results)=}')
     write_gpx_trace(results)
 
 
