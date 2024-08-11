@@ -41,6 +41,14 @@ Move the green cursor at the bottom to see the trace
 
 # Misc
 
-This `exiftool` command might help fix dates :
+https://exiftool.org/ might help cleanup or setup missing data
+
+    winget install --source winget --exact --id OliverBetz.ExifTool
+
+This command might help fix dates :
 
     exiftool "-AllDates<DateTimeOriginal" *
+
+This command`helps generate missing dates from manually-set names :
+
+    exiftool "-AllDates<Filename" *
