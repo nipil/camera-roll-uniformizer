@@ -38,3 +38,9 @@ Browse to https://gpx.studio/
 Click on "load" GPX, choose "Desktop", browse to your `trace.gpx` file
 
 Move the green cursor at the bottom to see the trace
+
+# Misc
+
+This `exiftool` command might help fix dates :
+
+    exiftool "-AllDates<DateTimeOriginal" *
