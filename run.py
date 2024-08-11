@@ -3,6 +3,7 @@ import concurrent.futures
 import dataclasses
 import datetime
 import io
+import json
 import logging
 import os
 import sys
@@ -63,22 +64,20 @@ class GpsInfo:
     altitude: float
 
 
-def delete_file(path, *, dry_run=False):
+def delete_file(path):
     logging.debug(f'Removing file {path}')
-    if not dry_run:
-        os.remove(path)
+    os.remove(path)
 
 
-def wand_transform_image(path, target_format, new_path, *, dry_run=False):
+def wand_transform_image(path, target_format, new_path):
     if os.path.exists(new_path):
         raise TargetExistsError(f'{new_path} already exists')
     logging.info(f'Converting image {path} to {target_format} into {new_path}')
-    if not dry_run:
-        with wand.image.Image(filename=path) as original:
-            with original.convert(target_format) as converted:
-                converted.save(filename=new_path)
-                delete_file(path, dry_run=dry_run)
-    return path if dry_run else new_path
+    with wand.image.Image(filename=path) as original:
+        with original.convert(target_format) as converted:
+            converted.save(filename=new_path)
+            delete_file(path)
+    return new_path
 
 
 def exif_build_gps_coordinates(image, dt):
@@ -135,12 +134,18 @@ def exif_get_information(path):
         return name, date_iso, gps_coord
 
 
+def dump_ffmpeg_infos(path, infos):
+    with open(f'{path}.json', 'wt') as f:
+        json.dump(infos, f, sort_keys=True, indent=4)
+
+
 def ffmpeg_get_information(path):
     logging.debug(f'Getting FFMPEG timestamp name for {path}')
     infos = ffmpeg.probe(path)
-    # MOV/MP4: format / tags / creation_time = '2024-05-12T05:38:26.000000Z'
-    # MOV: format / tags / com.apple.quicktime.creationdate = '2024-05-12T14:38:26+0900'
+    # dump_ffmpeg_infos(path, infos)
     try:
+        # MOV/MP4: format / tags / creation_time = '2024-05-12T05:38:26.000000Z'
+        # MOV: format / tags / com.apple.quicktime.creationdate = '2024-05-12T14:38:26+0900'
         creation_time = infos['format']['tags']['creation_time']
     except KeyError as e:
         raise FfmpegError(f'{path} has no ffmpeg creation time')
@@ -153,24 +158,22 @@ def ffmpeg_get_information(path):
     return name, date_iso, gps_coord
 
 
-def create_directory(path, *, dry_run=False):
+def create_directory(path):
     logging.debug(f'Creating {path} folder')
     try:
-        if not dry_run:
-            os.mkdir(path)
-            logging.info(f'Created {path} folder')
+        os.mkdir(path)
+        logging.info(f'Created {path} folder')
     except FileExistsError as e:
         pass
 
 
-def rename_file(src_path, dst_path, *, dry_run=False):
+def rename_file(src_path, dst_path):
     logging.info(f'Renaming {src_path} into {dst_path}')
-    if not dry_run:
-        os.rename(src_path, dst_path)
+    os.rename(src_path, dst_path)
 
 
-def rename_without_overwrite(path, new_name, out_directory, extension, *, dry_run=False):
-    create_directory(out_directory, dry_run=dry_run)
+def rename_without_overwrite(path, new_name, out_directory, extension):
+    create_directory(out_directory)
     i = 0
     while True:
         new_path = os.path.join(out_directory, f'{new_name}{extension}')
@@ -180,72 +183,42 @@ def rename_without_overwrite(path, new_name, out_directory, extension, *, dry_ru
         i = i + 1
         if i > MAX_CONFLICT_SUFFIXING:
             raise TargetExistsError(f'{new_path} still exists, not trying further prefixing')
-    rename_file(path, new_path, dry_run=dry_run)
+    rename_file(path, new_path)
 
 
-def process_media(path, *, dry_run=False):
+def process_media(path):
     gps_coord = None
     name, extension = os.path.splitext(os.path.basename(path))
     low_extension = extension.lower()
     # remove useless files types
     if low_extension in REMOVE_EXTENSIONS:
-        delete_file(path, dry_run=dry_run)
+        delete_file(path)
         return
     # convert to desired image format if needed
     if low_extension in TRANSFORM_IMAGE_EXTENSIONS:
         directory = os.path.dirname(path)
         new_path = os.path.join(directory, f'{name}{TARGET_IMAGEMAGICK_EXTENSION}')
-        path = wand_transform_image(path, TARGET_IMAGEMAGICK_FORMAT, new_path, dry_run=dry_run)
+        path = wand_transform_image(path, TARGET_IMAGEMAGICK_FORMAT, new_path)
         name, extension = os.path.splitext(os.path.basename(path))
         low_extension = extension.lower()
     # extract date and time, move and rename
     if low_extension in EXIF_IMAGE_EXTENSIONS:
         new_name, out_directory, gps_coord = exif_get_information(path)
-        rename_without_overwrite(path, new_name, out_directory, low_extension, dry_run=dry_run)
+        rename_without_overwrite(path, new_name, out_directory, low_extension)
     if low_extension in VIDEO_IMAGE_EXT:
         new_name, out_directory, gps_coord = ffmpeg_get_information(path)
-        rename_without_overwrite(path, new_name, out_directory, low_extension, dry_run=dry_run)
+        rename_without_overwrite(path, new_name, out_directory, low_extension)
     return gps_coord
 
 
-def try_process_file(path, *, dry_run=False):
+def try_process_file(path):
     try:
-        return process_media(path, dry_run=dry_run)
+        return process_media(path)
     except SkipFileError as e:
         logging.warning(f'Skipping file {path}: {e}')
     except Exception as e:
         logging.error(f'Unknown exception, skipping file {path} due to : {e}')
     return None
-
-
-def queue_file(path, *, executor, dry_run=False):
-    logging.debug(f'Queuing file {path}')
-    yield executor.submit(try_process_file, path, dry_run=dry_run)
-
-
-def process_directory(path, *, executor, dry_run=False):
-    logging.debug(f'Processing directory {path}')
-    for root, dirs, files in os.walk(path):
-        for i, file in enumerate(files):
-            path = os.path.join(root, file)
-            yield from queue_file(path, executor=executor, dry_run=dry_run)
-        for directory in dirs:
-            path = os.path.join(root, directory)
-            yield from process_directory(path, executor=executor, dry_run=dry_run)
-
-
-def process_source(source, *, executor, dry_run=False):
-    logging.debug(f'Processing source {source}')
-    if os.path.isdir(source):
-        yield from process_directory(source, executor=executor, dry_run=dry_run)
-    else:
-        yield from queue_file(source, executor=executor, dry_run=dry_run)
-
-
-def process_sources(sources, *, executor, dry_run=False):
-    logging.debug(f'Processing sources {sources}')
-    for source in sources:
-        yield from process_source(source, executor=executor, dry_run=dry_run)
 
 
 def write_gpx_trace(entries):
@@ -273,11 +246,39 @@ def write_gpx_trace(entries):
             file.write(buf.getvalue())
 
 
+def get_directory_files(directory):
+    for root, dirs, files in os.walk(directory):
+        for i, file in enumerate(files):
+            path = os.path.join(root, file)
+            yield path
+        for directory in dirs:
+            path = os.path.join(root, directory)
+            yield from get_directory_files(path)
+
+
+def get_source_files(source):
+    if os.path.isdir(source):
+        yield from get_directory_files(source)
+    else:
+        yield source
+
+
+def get_sources_files(sources):
+    for source in sources:
+        yield from get_source_files(source)
+
+
+def process_files(files):
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        for result in executor.map(try_process_file, files):
+            if result is None:
+                continue
+            yield result
+
+
 def run(args):
-    with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
-        futures = process_sources(args.sources, executor=executor, dry_run=args.dry_run)
-        results = [future.result() for future in futures if future.result() is not None]
-        results = sorted(results, key=lambda gps_info: gps_info.timestamp)
+    files = get_sources_files(args.sources)
+    results = process_files(files)
     write_gpx_trace(results)
 
 
@@ -293,8 +294,6 @@ def main(argv=None):
         argv = sys.argv[1:]
     parser = argparse.ArgumentParser()
     parser.add_argument('sources', nargs='+')
-    parser.add_argument('--workers', type=check_positive_int)
-    parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--log-level', choices=['debug', 'info', 'warning', 'error', 'critical'], default='warning')
     args = parser.parse_args(argv)
     logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S',
@@ -311,4 +310,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
+    main(['--log-level', 'debug', '2023-08-22'])
