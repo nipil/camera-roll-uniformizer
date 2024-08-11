@@ -2,6 +2,7 @@ import argparse
 import concurrent.futures
 import dataclasses
 import datetime
+import zoneinfo
 import io
 import json
 import logging
@@ -26,6 +27,8 @@ TARGET_IMAGEMAGICK_FORMAT = 'jpeg'
 TARGET_IMAGEMAGICK_EXTENSION = '.jpg'
 
 TRACE_GPX = 'trace.gpx'
+
+LOCAL_ZONE_INFO = zoneinfo.ZoneInfo('Asia/Tokyo')
 
 
 class MyError(Exception):
@@ -120,7 +123,8 @@ def exif_get_information(path):
             dt = image.datetime
         except AttributeError as e:
             raise ExifDateTimeError(f'{path} has no datetime information')
-        dt = datetime.datetime.strptime(dt, '%Y:%m:%d %H:%M:%S')  # '2024:05:05 18:19:59'
+        dt = datetime.datetime.strptime(image.datetime, '%Y:%m:%d %H:%M:%S')  # '2024:05:05 18:19:59'
+        dt = dt.replace(tzinfo=LOCAL_ZONE_INFO)
         # build gps coordinates
         gps_coord = None
         try:
@@ -130,7 +134,7 @@ def exif_get_information(path):
         # build new name
         date_iso = dt.strftime('%Y-%m-%d')
         time_iso = dt.strftime('%H-%M-%S')
-        name = dt.strftime(f'{date_iso}_{time_iso}_LOCAL')
+        name = dt.strftime(f'{date_iso}_{time_iso}')
         return name, date_iso, gps_coord
 
 
@@ -150,9 +154,11 @@ def ffmpeg_get_information(path):
     except KeyError as e:
         raise FfmpegError(f'{path} has no ffmpeg creation time')
     dt = datetime.datetime.strptime(creation_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+    dt = dt.replace(tzinfo=datetime.timezone.utc)
+    dt = dt.astimezone(LOCAL_ZONE_INFO)
     date_iso = dt.strftime('%Y-%m-%d')
     time_iso = dt.strftime('%H-%M-%S')
-    name = dt.strftime(f'{date_iso}_{time_iso}_UTC')
+    name = dt.strftime(f'{date_iso}_{time_iso}')
     # TODO: extract gps coordinates from video file ?
     gps_coord = None
     return name, date_iso, gps_coord
@@ -277,6 +283,7 @@ def process_files(files):
 
 
 def run(args):
+    # TODO: provide hour shift to subprocesssing
     files = get_sources_files(args.sources)
     results = process_files(files)
     write_gpx_trace(results)
@@ -310,4 +317,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main(['--log-level', 'debug', '2023-08-22'])
+    main()
