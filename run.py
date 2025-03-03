@@ -15,9 +15,9 @@ from wand.image import Image
 
 MAX_CONFLICT_SUFFIXING = 10
 
-REMOVE_EXTENSIONS = ('.aae',)
+REMOVE_EXTENSIONS = ('.aae', '.json')
 
-EXIF_IMAGE_EXTENSIONS = ('.jpg')
+EXIF_IMAGE_EXTENSIONS = ('.jpg',)
 
 VIDEO_IMAGE_EXT = ('.mov', '.mp4')
 
@@ -30,11 +30,11 @@ TRACE_GPX = 'trace.gpx'
 LOCAL_ZONE_INFO = ZoneInfo('Africa/Johannesburg')
 
 
-class MyError(Exception):
+class AppError(Exception):
     pass
 
 
-class SkipFileError(MyError):
+class SkipFileError(AppError):
     pass
 
 
@@ -126,7 +126,7 @@ def exif_get_image_information(path: Path, image: exif.Image) -> MediaInfo:
     logging.debug(f'Exif version for {path}: {exif_version}')
     try:
         dt = datetime.strptime(image.datetime, '%Y:%m:%d %H:%M:%S')
-    except AttributeError as e:
+    except AttributeError:
         raise ExifDateTimeError(f'{path} has no datetime information')
     dt = dt.replace(tzinfo=LOCAL_ZONE_INFO)
     try:
@@ -153,13 +153,16 @@ def dump_ffmpeg_infos(path: Path, infos: Any):
 
 def ffmpeg_get_information(path: Path) -> MediaInfo:
     logging.debug(f'Getting FFMPEG timestamp name for {path}')
-    infos = ffmpeg.probe(path)
+    try:
+        infos = ffmpeg.probe(path)
+    except FileNotFoundError as e:
+        raise AppError(f'ffprobe raised a "file not found" exception : are you sure it is installed ?')
     dump_ffmpeg_infos(path, infos)
     try:
         # MOV/MP4: format / tags / creation_time = '2024-05-12T05:38:26.000000Z'
         # MOV: format / tags / com.apple.quicktime.creationdate = '2024-05-12T14:38:26+0900'
         creation_time = infos['format']['tags']['creation_time']
-    except KeyError as e:
+    except KeyError:
         raise FfmpegError(f'{path} has no ffmpeg creation time')
     dt = datetime.strptime(creation_time, '%Y-%m-%dT%H:%M:%S.%fZ')
     dt = dt.replace(tzinfo=timezone.utc)
@@ -197,16 +200,11 @@ def process_media(path: Path) -> GpsInfo | None:
         info = ffmpeg_get_information(path)
         gps = info.gps
         path = rename_without_overwrite(path, Path(info.date_iso), info, path.suffix.lower())
+    logging.debug(f'Final {path} GPS coordinates: {gps}')
     return gps
 
 
 def try_process_file(path: Path) -> GpsInfo | None:
-    try:
-        return process_media(path)
-    except SkipFileError as e:
-        logging.warning(f'Skipping file {path}: {e}')
-    except Exception as e:
-        logging.error(f'Unknown exception, skipping file {path} due to : {e}')
     return None
 
 
@@ -218,8 +216,8 @@ def write_gpx_trace(entries: list[GpsInfo], *, output_file: Path) -> None:
             <gpx version="1.0"
             creator="ExifTool 12.85"
             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-            xmlns="http://www.topografix.com/GPX/1/0"
-            xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd">
+            xmlns="https://www.topografix.com/GPX/1/0"
+            xsi:schemaLocation="https://www.topografix.com/GPX/1/0 https://www.topografix.com/GPX/1/0/gpx.xsd">
             <trk>
             <number>1</number>
             <trkseg>\n''')
@@ -255,7 +253,14 @@ def get_sources_files(sources: list[Path]) -> Generator[Path, None, None]:
 
 def process_files(files: list[Path]) -> Generator[GpsInfo, None, None]:
     for file in files:
-        result = try_process_file(file)
+        result = None
+        try:
+            result = process_media(file)
+        except SkipFileError as e:
+            logging.warning(f'Skipping file {file}: {e}')
+        except AppError as e:
+            logging.error(f'Application error: {e}')
+            break
         if result is None:
             continue
         yield result
@@ -279,7 +284,7 @@ def main(argv: list[str] = None) -> None:
         results = list(process_files(files))
         write_gpx_trace(results, output_file=Path(TRACE_GPX))
         logging.info(f'Processing completed in {perf_counter() - start:.2f} seconds')
-    except MyError as e:
+    except AppError as e:
         logging.error(e)
 
 
