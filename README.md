@@ -26,8 +26,6 @@ Install package via PIP : `exif`
 
 # Run
 
-Use `--dry-run` option to run in dry-run mode
-
 Add folders and files as command line arguments to have them walked for files
 
 
